@@ -72,8 +72,11 @@ def get_all_users(final_recipe_ids):
 #data.to_csv("../data/reviews.csv",index=False)
 
 
-data = get_all_users(final_recipe_ids[0:10])
+data = get_all_users(final_recipe_ids[0:5])
 data.to_csv("../data/reviews.csv",index=False)
+
+data = get_all_users(final_recipe_ids[5:10])
+data.to_csv("../data/reviews.csv",index=False,mode='a', header=False)
 
 data = get_all_users(final_recipe_ids[10:100])
 data.to_csv("../data/reviews.csv",index=False,mode='a', header=False)
