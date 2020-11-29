@@ -22,6 +22,8 @@ RECIPE_CSV_FIELDNAMES = ['id', 'url', 'title', 'summary', 'category', 'breadcrum
 			          	 'rating_count', 'rating_detail', 'info', 'ingredients', 'directions', 'notes',
 			          	 'nutrition', 'main_image', 'ugc_image']
 
+RESULT_CSV_PATH = 'recipes.csv'
+
 
 def is_valid_recipe_url(url):
 	"""Check whether the given url is a valid recipe url.
@@ -273,12 +275,12 @@ def scrape_category_root_urls(category_root_urls):
 		driver.quit()
 	return True
 
-def process_category_root_urls_in_parallel(category_root_urls, num_of_process=5):
+def process_category_root_urls_in_parallel(category_root_urls, num_of_process=4):
 	"""Process the given list of root urls in parallel using a simple multiprocessing where each process is responsible for processing the same number of categories.
 
 	Args:
 		category_root_urls: List of category root url to scrape.
-		num_of_process: Number of process that invoked at the same time for multi-processing. Defaults to 5.
+		num_of_process: Number of process that invoked at the same time for multi-processing. Defaults to 4.
 
     Returns:
 		True if all the processes have finished running.
@@ -304,7 +306,7 @@ def process_category_root_urls_in_parallel(category_root_urls, num_of_process=5)
 
 	return True
 
-def combine_recipe_sources_from_category_cache(category_root_urls):
+def coalesce_recipe_sources_from_category_cache(category_root_urls):
 	"""Combine all found urls from each category root urls.
 
 	Args:
@@ -469,7 +471,7 @@ def scrape_recipe_sources(recipe_sources, batch_id):
 
 	scraped_ids = set()
 	if path.exists(cache_path):
-		scraped_ids = set(pandas.read_csv(cache_path, usecols=['id']))
+		scraped_ids = set([row[0] for row in pandas.read_csv(RESULT_CSV_PATH, usecols=['id']).values])
 	else:
 		with open(cache_path, 'w') as csv_file:
 			writer = csv.DictWriter(csv_file, fieldnames=RECIPE_CSV_FIELDNAMES)
@@ -493,18 +495,45 @@ def scrape_recipe_sources(recipe_sources, batch_id):
 
 	return True
 
-def process_recipe_sources_in_parallel(recipe_sources, num_of_process=5):
+def remove_scraped_recipe_from_list(recipe_sources):
+	"""Remove all the previously scraped recipe from the given recipe source list.
+
+	Args:
+		recipe_sources: List of recipe sources. A source contains a 'url', the recipe URL, and 'categories', the categories associated with the recipe page.
+
+    Returns:
+		Trimmed recipe sources which all member of the list has not been scraped yet.
+	"""
+	scraped_ids = set()
+	if path.exists(RESULT_CSV_PATH):
+		scraped_ids = set([row[0] for row in pandas.read_csv(RESULT_CSV_PATH, usecols=['id']).values])
+
+	new_recipe_sources = []
+	for recipe_source in recipe_sources:
+		recipe_id = recipe_id_from_recipe_url(recipe_source['url'])
+
+		if recipe_id in scraped_ids:
+			continue
+
+		new_recipe_sources.append(recipe_source)
+
+	print('Number of skipped recipes: {}. They are skipped because their info have been scraped before.'.format(len(recipe_sources)-len(new_recipe_sources)))
+	return new_recipe_sources
+
+
+def process_recipe_sources_in_parallel(recipe_sources, num_of_process=4):
 	"""Process the given list of recipe sources in parallel using a simple multiprocessing where each process is responsible for processing the same number of categories.
 
 	Args:
 		recipe_sources: List of recipe sources. A source contains a 'url', the recipe URL, and 'categories', the categories associated with the recipe page.
-		num_of_process: Number of process that invoked at the same time for multi-processing. Defaults to 5.
+		num_of_process: Number of process that invoked at the same time for multi-processing. Defaults to 4.
 
     Returns:
 		True if all the processes have finished running and after the csv caches have been combined into one csv.
 	"""
 	start_time = time.perf_counter()
 
+	recipe_sources = remove_scraped_recipe_from_list(recipe_sources)
 	recipe_sources_len = len(recipe_sources)
 
 	num_of_recipe_per_process = recipe_sources_len / num_of_process
@@ -533,14 +562,13 @@ def coalesce_recipe_scrape_caches():
     Returns:
 		True if the recipe caches have successfully combined into one csv.
 	"""
-	result_csv_path = 'recipes.csv'
-
-	with open(result_csv_path, 'w') as csv_file:
-		writer = csv.DictWriter(csv_file, fieldnames=RECIPE_CSV_FIELDNAMES)
-		writer.writeheader()
+	if not path.exists(RESULT_CSV_PATH):
+		with open(RESULT_CSV_PATH, 'w') as csv_file:
+			writer = csv.DictWriter(csv_file, fieldnames=RECIPE_CSV_FIELDNAMES)
+			writer.writeheader()
 
 	# Coalesce recipe caches one by one.
-	for batch_id in range(num_of_recipe_batch):
+	for batch_id in range(99999):
 		print('Combining data from cached recipes batch {}...'.format(batch_id))
 		cache_path = recipe_cache_path(batch_id)
 
@@ -548,21 +576,24 @@ def coalesce_recipe_scrape_caches():
 			# Stops when the given cache path is not found. Cache IDs are not sparse.
 			break
 
-		with open(result_csv_path, 'a') as csv_file:
+		with open(RESULT_CSV_PATH, 'a') as csv_file:
 			writer = csv.DictWriter(csv_file, fieldnames=RECIPE_CSV_FIELDNAMES)
 			with open(cache_path) as cache_csv_file:
 				reader = csv.DictReader(cache_csv_file)
 				for row in reader:
 					writer.writerow(row)
+
+		# Remove old cache path
+		os.remove(cache_path)
 		
 	# Sort the csv.
 	sorted_csv_data = None
-	with open(result_csv_path, 'r') as csv_file:
+	with open(RESULT_CSV_PATH, 'r') as csv_file:
 		reader = csv.DictReader(csv_file, fieldnames=RECIPE_CSV_FIELDNAMES)
 		next(reader, None)	# Skip the header
 		sorted_csv_data = sorted(reader, key=lambda row:int(row['id']), reverse=False)
 
-	with open(result_csv_path, 'w') as csv_file:
+	with open(RESULT_CSV_PATH, 'w') as csv_file:
 		writer = csv.DictWriter(csv_file, fieldnames=RECIPE_CSV_FIELDNAMES)
 		writer.writeheader()
 		for row in sorted_csv_data:
@@ -577,9 +608,13 @@ if __name__ == '__main__':
 	if not os.path.exists('cache'):
 		os.makedirs('cache')
 
+	# Update recipe with remaining caches, just in case the program was interrupted previously.
+	coalesce_recipe_scrape_caches()	
+
+	# Scrape scrape scrape!
 	root_url = 'https://www.allrecipes.com/recipes/'
 	category_root_urls = scrape_root_url(root_url)
 	process_category_root_urls_in_parallel(category_root_urls)
-	process_recipe_sources_in_parallel(combine_recipe_sources_from_category_cache(category_root_urls))
+	process_recipe_sources_in_parallel(coalesce_recipe_sources_from_category_cache(category_root_urls))
 	
 	
