@@ -3,7 +3,7 @@ import csv
 import json
 import multiprocessing
 import pandas
-import re 
+import re
 import sys
 import time
 import unicodedata
@@ -22,7 +22,7 @@ RECIPE_CSV_FIELDNAMES = ['id', 'url', 'title', 'summary', 'category', 'breadcrum
 			          	 'rating_count', 'rating_detail', 'info', 'ingredients', 'directions', 'notes',
 			          	 'nutrition', 'main_image', 'ugc_image']
 
-RESULT_CSV_PATH = 'recipes.csv'
+RESULT_CSV_PATH = '../data/recipes.csv'
 
 
 def is_valid_recipe_url(url):
@@ -103,9 +103,15 @@ def clean_url_list(urls, should_clean_url=False):
 	return urls
 
 def category_name_from_category_root_url(category_root_url):
+	"""Category name from the given root URL of the category.
+
+	Args:
+		category_root_url: Root URL of the category.
+
+	Returns:
+		Category name.
+	"""
 	return category_root_url.rsplit("/",2)[1]
-
-
 
 def clean_text(text):
 	""" Replace all fractional non-ascii characters.
@@ -365,7 +371,12 @@ def scrape_single_recipe_url(recipe_url, recipe_category, driver):
 	recipe_id = recipe_id_from_recipe_url(recipe_url)
 
 	# Recipe Title
-	recipe_title = clean_text(soup.find(class_='intro article-info').find(class_='headline heading-content').get_text())
+	try:
+		recipe_title = clean_text(soup.find(class_='intro article-info').find(class_='headline heading-content').get_text())
+	except:
+		# When title scrape is failed, mark the recipe's title with an empty string
+		# TODO(mdp9): Find out why 'intro article-info' class is not found once in a while.
+		recipe_title = ''
 
 	# Recipe Summary
 	recipe_summary = clean_text(soup.find(class_='recipe-summary').get_text())
@@ -552,7 +563,7 @@ def process_recipe_sources_in_parallel(recipe_sources, num_of_process=4):
 	finish_time = time.perf_counter()
 	print('Done scraping', recipe_sources_len, 'recipes in ', round(finish_time-start_time, 2), 'second(s).')
 
-	coalesce_recipe_scrape_caches(num_of_process)
+	coalesce_recipe_scrape_caches()
 
 	return True
 
@@ -568,13 +579,15 @@ def coalesce_recipe_scrape_caches():
 			writer.writeheader()
 
 	# Coalesce recipe caches one by one.
-	for batch_id in range(99999):
-		print('Combining data from cached recipes batch {}...'.format(batch_id))
+	batch_id = 0
+	while True:
 		cache_path = recipe_cache_path(batch_id)
 
 		if not path.exists(cache_path):
 			# Stops when the given cache path is not found. Cache IDs are not sparse.
 			break
+
+		print('Combining data from cached recipes batch {}...'.format(batch_id))
 
 		with open(RESULT_CSV_PATH, 'a') as csv_file:
 			writer = csv.DictWriter(csv_file, fieldnames=RECIPE_CSV_FIELDNAMES)
@@ -585,6 +598,8 @@ def coalesce_recipe_scrape_caches():
 
 		# Remove old cache path
 		os.remove(cache_path)
+
+		batch_id += 1
 		
 	# Sort the csv.
 	sorted_csv_data = None
@@ -609,12 +624,10 @@ if __name__ == '__main__':
 		os.makedirs('cache')
 
 	# Update recipe with remaining caches, just in case the program was interrupted previously.
-	coalesce_recipe_scrape_caches()	
-
+	coalesce_recipe_scrape_caches()
+	
 	# Scrape scrape scrape!
 	root_url = 'https://www.allrecipes.com/recipes/'
 	category_root_urls = scrape_root_url(root_url)
 	process_category_root_urls_in_parallel(category_root_urls)
 	process_recipe_sources_in_parallel(coalesce_recipe_sources_from_category_cache(category_root_urls))
-	
-	
