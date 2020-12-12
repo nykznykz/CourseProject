@@ -16,8 +16,6 @@ final_recipe_ids = pd.read_csv("../data/recipe_ids.csv")["id"].tolist()
 print(final_recipe_ids)
 
 ##### user reviews #####
-# To search faster through large blocks of HTML Soups, set page size to max 25
-# There are < 2500 reviews for all of Chef John's recipes -> 2500/25 = 100 max pages
 def get_users(recipe_id):
     '''Returns users in a dictionary for a specific recipe
     '''
