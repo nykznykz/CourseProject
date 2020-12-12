@@ -1,26 +1,12 @@
 
 import csv
-import json
-import multiprocessing
-import pandas
-import re
 import sys
-import time
-import unicodedata
-import urllib
 import math
-
-from bs4 import BeautifulSoup
-from selenium import webdriver 
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.common.action_chains import ActionChains
-
-import os.path
-from os import path
 
 # Constants
 REVIEWS_CSV_FIELDNAMES = ['date', 'rating', 'recipe_id', 'user_id', 'username']
 REVIEWS_CSV_PATH = '../../data/reviews.csv'
+EPS = 1e-5
 
 class Review:
 	def __init__(self, recipe_id, rating):
@@ -35,13 +21,16 @@ class UserData:
 		self.reviews.sort(key=lambda x:x.recipe_id)
 		
 		avg_rating = 0.0
-		for review in reviews:
-			avg_rating += review.rating
-		avg_rating /= len(reviews)
+		if len(reviews) > 0:
+			for review in reviews:
+				avg_rating += review.rating
+			avg_rating /= len(reviews)
+		else:
+			avg_rating = EPS
 
 		self.avg_rating = avg_rating
 
-	def find_rating_by_recipe_id(self, recipe_id, use_cosine_approach=True):
+	def find_rating_by_recipe_id(self, recipe_id, use_avg_on_non_rated_recipe=True):
 		# Binary search to find the recipe id.
 
 		i = 0
@@ -57,7 +46,7 @@ class UserData:
 		if j < len(self.reviews) and self.reviews[j].recipe_id == recipe_id:
 			return self.reviews[j].rating
 		else:
-			return use_cosine_approach if self.avg_rating else 0.0
+			return self.avg_rating if use_avg_on_non_rated_recipe else EPS
 
 def pearson_user_similarity_weight(user_a, user_b):
 	sum_cross = 0.0
@@ -102,7 +91,7 @@ def pearson_user_similarity_weight(user_a, user_b):
 		sum_square_b += diff_b * diff_b
 		j += 1
 
-	return sum_cross / math.sqrt(sum_square_a * sum_square_b)
+	return (sum_cross + EPS) / math.sqrt((sum_square_a * sum_square_b) + EPS)
 
 def cosine_user_similarity_weight(user_a, user_b, use_avg_on_non_rated_recipe=True):
 	sum_cross = 0.0
@@ -152,15 +141,18 @@ def cosine_user_similarity_weight(user_a, user_b, use_avg_on_non_rated_recipe=Tr
 		sum_square_b += review_b.rating * review_b.rating
 		j += 1
 
-	return sum_cross / math.sqrt(sum_square_a * sum_square_b)
+	return (sum_cross + EPS) / math.sqrt((sum_square_a * sum_square_b) + EPS)
+
 
 def filter_by_memory_based_collaborative_filtering(user_id, user_data_list, recipe_id_to_predict_list, use_cosine_approach=True):
 	user_similarity_weight_cache = dict()
 	similarity_weight_sum = 0.0
 
-	main_user_data = next(filter(lambda x: x.user_id == user_id, user_data_list))
-
-	print(main_user_data.user_id)
+	main_user_data = UserData(user_id, '', [])	# Placeholder user data
+	for user_data in user_data_list:
+		if user_data.user_id == user_id:
+			main_user_data = user_data
+			break
 
 	prediction_result = []
 	for recipe_id in recipe_id_to_predict_list:
@@ -176,14 +168,13 @@ def filter_by_memory_based_collaborative_filtering(user_id, user_data_list, reci
 			if user_data.user_id in user_similarity_weight_cache:
 				user_similarity_weight = user_similarity_weight_cache[user_data.user_id]
 			else:
-				user_similarity_weight = use_cosine_approach if cosine_user_similarity_weight(main_user_data, user_data) else pearson_user_similarity_weight(main_user_data, user_data)
+				user_similarity_weight = cosine_user_similarity_weight(main_user_data, user_data) if use_cosine_approach else pearson_user_similarity_weight(main_user_data, user_data)
 				user_similarity_weight_cache[user_data.user_id] = user_similarity_weight
 				similarity_weight_sum += user_similarity_weight
 
-			prediction_rating += user_similarity_weight * user_data.find_rating_by_recipe_id(recipe_id)
+			prediction_rating += user_similarity_weight * (user_data.find_rating_by_recipe_id(recipe_id) - user_data.avg_rating)
 
-
-		prediction_rating = (prediction_rating / similarity_weight_sum) + main_user_data.avg_rating
+		prediction_rating = max((prediction_rating / similarity_weight_sum) + main_user_data.avg_rating, EPS)
 
 		prediction_result.append(prediction_rating)
 
