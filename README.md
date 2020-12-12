@@ -22,7 +22,7 @@ Data was scraped from allrecipes.com, as there was no public API. I narrowed the
 
 Content Data
 
-- ```all_recipes.csv```
+- ```ecipe_ids.csv```
 
 - 1100+ Recipes from 
 
@@ -46,7 +46,7 @@ Content Data
 
 2. **Web Scraping**: beautifulsoup, requests, regex
 
-- Please refer to ```web_scraper.py``` for more details
+- Please refer to ```scraper.py``` for more details
 
 
 
