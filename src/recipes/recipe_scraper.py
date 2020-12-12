@@ -281,12 +281,12 @@ def scrape_category_root_urls(category_root_urls):
 		driver.quit()
 	return True
 
-def process_category_root_urls_in_parallel(category_root_urls, num_of_process=4):
+def process_category_root_urls_in_parallel(category_root_urls, num_of_process=5):
 	"""Process the given list of root urls in parallel using a simple multiprocessing where each process is responsible for processing the same number of categories.
 
 	Args:
 		category_root_urls: List of category root url to scrape.
-		num_of_process: Number of process that invoked at the same time for multi-processing. Defaults to 4.
+		num_of_process: Number of process that invoked at the same time for multi-processing. Defaults to 5.
 
     Returns:
 		True if all the processes have finished running.
@@ -499,7 +499,23 @@ def scrape_recipe_sources(recipe_sources, batch_id):
 				if recipe_id in scraped_ids:
 					continue
 
-				writer.writerow(scrape_single_recipe_url(recipe_source['url'], recipe_source['categories'], driver))
+				recipe_content = None
+
+				# Sometimes the driver experiences a connection failure. Keep trying to scrape one page until it succeeded.
+				try:
+					recipe_content = scrape_single_recipe_url(recipe_source['url'], recipe_source['categories'], driver)
+				except:
+					# Instantiate a new driver.
+					try:
+						driver.close()
+						driver.quit()
+					finally:
+						time.sleep(1)
+						driver = webdriver.Chrome('./chromedriver',options=options)
+						recipe_content = None
+
+				writer.writerow(recipe_content)
+
 	finally:
 		driver.close()
 		driver.quit()
@@ -532,12 +548,12 @@ def remove_scraped_recipe_from_list(recipe_sources):
 	return new_recipe_sources
 
 
-def process_recipe_sources_in_parallel(recipe_sources, num_of_process=4):
+def process_recipe_sources_in_parallel(recipe_sources, num_of_process=5):
 	"""Process the given list of recipe sources in parallel using a simple multiprocessing where each process is responsible for processing the same number of categories.
 
 	Args:
 		recipe_sources: List of recipe sources. A source contains a 'url', the recipe URL, and 'categories', the categories associated with the recipe page.
-		num_of_process: Number of process that invoked at the same time for multi-processing. Defaults to 4.
+		num_of_process: Number of process that invoked at the same time for multi-processing. Defaults to 5.
 
     Returns:
 		True if all the processes have finished running and after the csv caches have been combined into one csv.
