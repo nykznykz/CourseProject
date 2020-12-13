@@ -1,6 +1,7 @@
 # CourseProject
 
 **A video presentation can be found [here](https://www.youtube.com/watch?v=qhwi7d4wOEM)**
+**Documentation for the project can be found [here](https://github.com/nykznykz/CourseProject/blob/main/Documentation.pdf)**
 
 # Recipe Recommender System
 
