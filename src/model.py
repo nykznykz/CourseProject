@@ -22,9 +22,9 @@ np.set_printoptions(suppress=True)
 pd.options.display.float_format = '{:.2f}'.format
 
 # load data / global variables
-all_users = pd.read_csv("./data/users/all_users.csv")
+all_users = pd.read_csv("../data/all_users.csv")
 all_users.drop_duplicates(inplace=True)
-all_recipes = pd.read_csv("./data/recipes/recipes.csv")
+all_recipes = pd.read_csv("../data/recipes.csv")
 all_recipes.drop_duplicates(inplace=True)
 #photo_urls = pd.read_csv("./data/photo_url/photo_urls.csv")
 #photo_urls.drop_duplicates(inplace=True)
