@@ -22,13 +22,13 @@ np.set_printoptions(suppress=True)
 pd.options.display.float_format = '{:.2f}'.format
 
 # load data / global variables
-all_users = pd.read_csv("./data/users/all_users.csv")
+all_users = pd.read_csv("./data/all_users.csv")
 all_users.drop_duplicates(inplace=True)
-all_recipes = pd.read_csv("./data/recipes/all_recipes.csv")
+all_recipes = pd.read_csv("./data/recipes.csv")
 all_recipes.drop_duplicates(inplace=True)
-photo_urls = pd.read_csv("./data/photo_url/photo_urls.csv")
-photo_urls.drop_duplicates(inplace=True)
-recipe_lookup = all_recipes[["recipe_id","title"]]
+# photo_urls = pd.read_csv("./data/photo_url/photo_urls.csv")
+# photo_urls.drop_duplicates(inplace=True)
+recipe_lookup = all_recipes[["id","title"]]
 
 # Collaborative filtering for those with at least 3 reviews
 # ratings_by_user = all_users.groupby(["user_id","username"])[["rating"]].count().sort_values("rating",ascending=False)
@@ -360,8 +360,8 @@ X_test_norm = X_norm.todense()[2400:]
 
 ### Naive model ###
 naive_preds = np.tile(0,(3211,1053))
-# print(f'RMSE Train for naive model: {np.sqrt(((np.array(X_train_norm)-naive_preds[0:2400])**2).mean())}')
-# print(f'RMSE Test for naive model: {np.sqrt(((np.array(X_test_norm)-naive_preds[2400:])**2).mean())}')
+print(f'RMSE Train for naive model: {np.sqrt(((np.array(X_train_norm)-naive_preds[0:2400])**2).mean())}')
+print(f'RMSE Test for naive model: {np.sqrt(((np.array(X_test_norm)-naive_preds[2400:])**2).mean())}')
 
 ### Matrix Factorization Metric Calculation ###
 
@@ -388,8 +388,8 @@ U_reduced, Sigma_reduced, VT_reduced = rank_k(30)
 U_new = np.dot(X_test_norm, np.dot(VT_reduced.T,np.linalg.inv(Sigma_reduced)))
 M_hat = np.dot(U_new,VT_reduced)
 
-#print(f'RMSE Train for SVD: {np.sqrt(((np.array(X_train_norm)-X_train_new)**2).mean())}')
-#print(f'RMSE Test for SVD: {np.sqrt(((np.array(X_test_norm)-np.array(M_hat))**2).mean())}')
+print(f'RMSE Train for SVD: {np.sqrt(((np.array(X_train_norm)-X_train_new)**2).mean())}')
+print(f'RMSE Test for SVD: {np.sqrt(((np.array(X_test_norm)-np.array(M_hat))**2).mean())}')
 
 ### Ranking Metrics ###
 def precision_and_recall_at_k(predictions, targets, k=6):
