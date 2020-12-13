@@ -1,12 +1,11 @@
 
 import csv
 import math
+import multiprocessing
 import sys
 import time
 
 """ Constants """
-REVIEWS_CSV_FIELDNAMES = ['date', 'rating', 'recipe_id', 'user_id', 'username']	# Expected field names of the reviews CSV data.
-REVIEWS_CSV_PATH = '../data/reviews.csv'	# Default path to the reviews CSV data.
 EPS = 1e-5	# Epsilon to use for optimizations (i.e., returning EPS value instead of a flat 0.0 in the calculation)
 
 class Review:
@@ -60,6 +59,82 @@ class UserData:
 			return self.reviews[j].rating
 		else:
 			return self.avg_rating if use_avg_on_non_rated_recipe else EPS
+
+def print_program_usage_guide():
+	""" Print a helpful program usage guide on the terminal."""
+	print('')
+	print('usage: "python collaborative_filtering.py <user_id>"')
+	print('for example, try: "python collaborative_filtering.py 3419993"')
+	print('')
+	print('optionals:')
+	print('		[—-use-average-on-non-rated=1/0] ==> When set to 0, disable the usage of user\'s average rating on non-rated recipes. Otherwise, the usage is enabled.')
+	print('		[--use-pearson=1/0] ==> When the value is 1, the similarity measure will use Pearson correlation coefficient method. Otherwise, Cosine method is used.')
+	print('		[-i REVIEWS_CSV_PATH] ==> Path to CSV path with required fields of [\'rating\', \'recipe_id\', \'user_id\']. Default path is ../data/all_users.csv.')
+	print('		[-k TOP_K_RESULT] ==> Number of recipes the recommendation will filter for the given user\'s recommendation. The default is 10 results.')
+	print('		[-p NUM_OF_PROCESSES] ==> Number of processes used in the parallel processing of the filtering. The default is 20 processes.')
+	print('		[-r RECIPE_ID_1 RECIPE_ID_2 …. RECIPE_ID_N] ==> Recipe candidates for the filtering. The default is all non-rated recipes of the given user are the candidates.')
+	print('')
+
+def config_from_sys_argv():
+	"""Parse the given program execution arguments.
+
+    Returns:
+		Dictionary of the configuration.
+	"""
+	argv = sys.argv
+	config_dict = dict()
+	
+	try:
+		if not len(argv) > 1:
+			raise Exception('Invalid arguments')
+
+		if not argv[1].isdigit():
+			raise Exception('Invalid arguments')
+
+		# Default values
+		config_dict['main-user-id'] = argv[1]
+		config_dict['csv-path'] = '../data/all_users.csv'
+		config_dict['use-pearson'] = False
+		config_dict['use-average-on-non-rated'] = True
+		config_dict['top-k'] = 10
+		config_dict['num-of-processes'] = 20
+
+		i = 2
+		while i < len(argv):
+			if argv[i] == '--use-average-on-non-rated=1':
+				config_dict['use-average-on-non-rated'] = True
+				i += 1
+			elif argv[i] == '--use-average-on-non-rated=0':
+				config_dict['use-average-on-non-rated'] = False
+				i += 1
+			elif argv[i] == '--use-pearson=1':
+				config_dict['use-pearson'] = True
+				i += 1
+			elif argv[i] == '--use-pearson=0':
+				config_dict['use-pearson'] = False
+				i += 1
+			elif argv[i] == '-i':
+				config_dict['csv-path'] = argv[i+1]
+				i += 2
+			elif argv[i] == '-k':
+				config_dict['top-k'] = int(argv[i+1])
+				i += 2
+			elif argv[i] == '-p':
+				config_dict['num-of-processes'] = int(argv[i+1])
+				i += 2
+			elif argv[i] == '-r':
+				i += 1
+				config_dict['recipe-list'] = []
+				while i < len(argv) and argv[i].isdigit():
+					config_dict['recipe-list'].append(argv[i])
+					i += 1
+			else:
+				raise Exception('Invalid arguments')
+	except:
+		print_program_usage_guide()
+		sys.exit()
+
+	return config_dict
 
 def pearson_user_similarity_weight(user_a, user_b, use_avg_on_non_rated_recipe=False):
 	"""User similarity measures by Pearson correlation coefficient measure.
@@ -192,55 +267,145 @@ def cosine_user_similarity_weight(user_a, user_b, use_avg_on_non_rated_recipe=Fa
 	return (sum_cross + EPS) / math.sqrt((sum_square_a * sum_square_b) + EPS)
 
 
-def filter_by_memory_based_collaborative_filtering(user_id, user_data_list, recipe_id_to_predict_list, use_cosine_approach=True, use_avg_on_non_rated_recipe=False):
+def measure_user_similarity(main_user_data, user_data_list, use_cosine_approach=True, use_avg_on_non_rated_recipe=False, process_id=None, process_result_dict=None):
+	"""Measure user similarity weight between the main user's and other users' data.
+
+	Args:
+    	main_user_data: User data which the prediction based on.
+    	user_data_list: List of UserData objects parsed from the reviews data.
+    	use_cosine_approach: If True, the cosine approach will be used in the calculation. Otherwise, Pearson correlation coefficient measures will be used instead.
+    	use_avg_on_non_rated_recipe: If True, optimization by using user's rating average value in calculations for non-rated items will be used. Otherwise, such optimization is not used.
+    	process_id: Assigned ID for the worker process of this function.
+    	process_result_dict: Synchronized result dictionary shared between processes.
+
+    Returns:
+		Tuple containing two values: the dictionary of {user_id: user_similarity_weight} and a float value of total sum of all similarity weights.
+		These results are inserted to the process_result_dict, if provided, with process ID as its key, and the result tuple mentioned above as its value.
+	"""
+	user_similarity_weight_cache = dict()
+	similarity_weight_sum = 0.0
+
+	for user_data in user_data_list:
+		if user_data.user_id == main_user_data.user_id:
+			continue
+
+		user_similarity_weight = cosine_user_similarity_weight(main_user_data, user_data, use_avg_on_non_rated_recipe) if use_cosine_approach else pearson_user_similarity_weight(main_user_data, user_data, use_avg_on_non_rated_recipe)
+		user_similarity_weight_cache[user_data.user_id] = user_similarity_weight
+		similarity_weight_sum += user_similarity_weight
+
+	if process_id != None and process_result_dict != None:
+		process_result_dict[process_id] = (user_similarity_weight_cache, similarity_weight_sum)
+
+	return (user_similarity_weight_cache, similarity_weight_sum)
+
+def predict_recipe_rating_by_memory_based(main_user_data, user_data_list, recipe_id_to_predict_list, user_similarity_weight_cache, similarity_weight_sum=None, use_avg_on_non_rated_recipe=False, process_id=None, process_result_dict=None):
+	"""Predict recipe rating of the given recipe IDs list for the given user data.
+
+	Args:
+    	main_user_data: User data which the prediction based on.
+    	user_data_list: List of UserData objects parsed from the reviews data.
+    	user_similarity_weight_cache: Cache of the similarity weight measurement between the main user's and other users' data.
+    	similarity_weight_sum: Sum of all measured similarity weight.
+    	use_avg_on_non_rated_recipe: If True, optimization by using user's rating average value in calculations for non-rated items will be used. Otherwise, such optimization is not used.
+    	process_id: Assigned ID for the worker process of this function.
+    	process_result_dict: Synchronized result dictionary shared between processes.
+
+    Returns:
+		List of rating predictions tuple of <rating_id, predicted_rating>, based on the user data of the given user ID.
+		These results are inserted to the process_result_dict, if provided, with recipe ID as its key, and its predicted rating as its value.
+	"""
+	if similarity_weight_sum == None:
+		similarity_weight_sum = 0.0
+		for weight in user_similarity_weight_cache.values():
+			similarity_weight_sum += weight
+
+	prediction_result = dict()
+	for recipe_id in recipe_id_to_predict_list:
+
+		prediction_rating = 0.0
+
+		for user_data in user_data_list:
+			if user_data.user_id == main_user_data.user_id:
+				continue
+
+			user_similarity_weight = user_similarity_weight_cache[user_data.user_id]
+			prediction_rating += user_similarity_weight * (user_data.find_rating_by_recipe_id(recipe_id, use_avg_on_non_rated_recipe) - user_data.avg_rating)
+
+		prediction_rating = max((prediction_rating / similarity_weight_sum) + main_user_data.avg_rating, EPS)
+		prediction_result[recipe_id] = prediction_rating
+
+	if process_result_dict != None:
+		process_result_dict.update(prediction_result)
+
+	return prediction_result.items()
+
+def filter_by_memory_based_collaborative_filtering(user_id, user_data_list, recipe_id_to_predict_list, use_cosine_approach=True, use_avg_on_non_rated_recipe=False, num_of_processes=15):
 	"""A basic collaborative filtering approach with memory based approach, taught in UIUC CS410 Fall 2020.
 
 	Args:
     	user_id: String of user ID.
     	user_data_list: List of UserData objects parsed from the reviews data.
     	recipe_id_to_predict_list: List of recipe IDs that the program will predict the rating value.
+    	use_cosine_approach: If True, the cosine approach will be used in the calculation. Otherwise, Pearson correlation coefficient measures will be used instead.
+    	use_avg_on_non_rated_recipe: If True, optimization by using user's rating average value in calculations for non-rated items will be used. Otherwise, such optimization is not used.
+    	num_of_processes: Number of processes will be used in the parallel processing of the filtering. Defaults to 20.
 
     Returns:
-		List of rating predictions where Xi is a rating prediction of the recipe index-i in the recipe_id_to_predict_list, based on the user with the given user ID.
+		List of rating predictions tuple of <rating_id, predicted_rating>, based on the user data of the given user ID.
 	"""
-	user_similarity_weight_cache = dict()
-	similarity_weight_sum = 0.0
-
 	main_user_data = UserData(user_id, '', [])	# Placeholder user data
 	for user_data in user_data_list:
 		if user_data.user_id == user_id:
 			main_user_data = user_data
 			break
 
-	prediction_result = []
-	for recipe_id in recipe_id_to_predict_list:
+	# Measure user similarity.
+	jobs = []
+	user_data_list_len = len(user_data_list)
+	processed_user_id_per_process = int(user_data_list_len / num_of_processes)
 
-		prediction_rating = 0.0
+	user_similarity_measure_process_result_dict = multiprocessing.Manager().dict()
+	for process_id in range(num_of_processes):
+		start_idx = processed_user_id_per_process * process_id
+		end_idx = user_data_list_len if (process_id == num_of_processes - 1) else processed_user_id_per_process * (process_id + 1)
+		proc = multiprocessing.Process(
+			target=measure_user_similarity,
+			args=(main_user_data, user_data_list[start_idx:end_idx], use_cosine_approach, use_avg_on_non_rated_recipe, process_id, user_similarity_measure_process_result_dict)
+		)
+		jobs.append(proc)
+		proc.start()
 
-		for user_data in user_data_list:
-			if user_data.user_id == user_id:
-				continue
+	for proc in jobs:
+		proc.join()
 
-			user_similarity_weight = 0.0
+	user_similarity_weight_cache = dict()
+	similarity_weight_sum = 0.0
+	for partial_user_similarity_weight_cache, partial_similarity_weight_sum in user_similarity_measure_process_result_dict.values():
+		user_similarity_weight_cache.update(partial_user_similarity_weight_cache)
+		similarity_weight_sum += partial_similarity_weight_sum
 
-			if user_data.user_id in user_similarity_weight_cache:
-				user_similarity_weight = user_similarity_weight_cache[user_data.user_id]
-			else:
-				user_similarity_weight = cosine_user_similarity_weight(main_user_data, user_data, use_avg_on_non_rated_recipe) if use_cosine_approach else pearson_user_similarity_weight(main_user_data, user_data, use_avg_on_non_rated_recipe)
+	# Calculate prediction rating using measured user similarity.
+	jobs = []
+	recipe_id_to_predict_list_len = len(recipe_id_to_predict_list)
+	processed_recipe_id_per_process = int(recipe_id_to_predict_list_len / num_of_processes)
 
-				user_similarity_weight_cache[user_data.user_id] = user_similarity_weight
-				similarity_weight_sum += user_similarity_weight
+	prediction_result_dict = multiprocessing.Manager().dict()
+	for process_id in range(num_of_processes):
+		start_idx = processed_recipe_id_per_process * process_id
+		end_idx = user_data_list_len if (process_id == num_of_processes - 1) else processed_recipe_id_per_process * (process_id + 1)
+		proc = multiprocessing.Process(
+			target=predict_recipe_rating_by_memory_based,
+			args=(main_user_data, user_data_list, recipe_id_to_predict_list[start_idx:end_idx], user_similarity_weight_cache, similarity_weight_sum, use_avg_on_non_rated_recipe, process_id, prediction_result_dict)
+		)
+		jobs.append(proc)
+		proc.start()
 
-			prediction_rating += user_similarity_weight * (user_data.find_rating_by_recipe_id(recipe_id, use_avg_on_non_rated_recipe) - user_data.avg_rating)
+	for proc in jobs:
+		proc.join()
 
-		prediction_rating = max((prediction_rating / similarity_weight_sum) + main_user_data.avg_rating, EPS)
+	return prediction_result_dict.items()
 
-		prediction_result.append(prediction_rating)
-
-	return prediction_result
-
-
-def load_user_data_from_reviews_data(reviews_csv_path = REVIEWS_CSV_PATH):
+def load_user_data_from_reviews_data(reviews_csv_path):
 	"""Load the user data from the available reviews data.
 
     Returns:
@@ -249,9 +414,8 @@ def load_user_data_from_reviews_data(reviews_csv_path = REVIEWS_CSV_PATH):
 	user_reviews_dict = dict()
 	user_username_dict = dict()
 
-	with open(REVIEWS_CSV_PATH, 'r') as csv_file:
-		reader = csv.DictReader(csv_file, fieldnames=REVIEWS_CSV_FIELDNAMES)
-		next(reader, None)	# Skip the header
+	with open(reviews_csv_path, 'r') as csv_file:
+		reader = csv.DictReader(csv_file)
 		for row in reader:
 			user_id = row['user_id']
 			review = Review(row['recipe_id'], row['rating'])
@@ -263,7 +427,7 @@ def load_user_data_from_reviews_data(reviews_csv_path = REVIEWS_CSV_PATH):
 
 			user_reviews_dict[user_id].append(review)
 
-	return [UserData(user_id, user_username_dict[user_id], review) for user_id, review in user_reviews_dict.items()]
+	return [UserData(user_id, user_username_dict[user_id], reviews) for user_id, reviews in user_reviews_dict.items()]
 
 def determine_recipe_to_predict(user_id, user_data_list):
 	"""Decide the recipe IDs list that the user with the given user id should try to predict. Basically the objects in the list are the recipes that the user hasn't rated yet.
@@ -293,80 +457,6 @@ def determine_recipe_to_predict(user_id, user_data_list):
 
 	return list(recipe_id_to_predict_set)		
 
-
-def print_program_usage_guide():
-	""" Print a helpful program usage guide on the terminal."""
-	print('')
-	print('usage: python collaborative_filtering.py <user_id>')
-	print('		for example, try : python collaborative_filtering.py 30079')
-	print('optionals:')
-	print('		[—-use-average-on-non-rated=1/0] ==> When set to 0, disable the usage of user\'s average rating on non-rated recipes. Otherwise, the usage is enabled.')
-	print('		[--use-pearson=1/0] ==> When the value is 1, the similarity measure will use Pearson correlation coefficient method. Otherwise, Cosine method is used.')
-	print('		[-i REVIEWS_CSV_PATH] ==> Path to CSV path with expected header of [\'date\', \'rating\', \'recipe_id\', \'user_id\', \'username\']. Default path is ../data/reviews.csv.')
-	print('		[-k TOP_K_RESULT] ==> Number of recipes the recommendation will filter for the given user\'s recommendation. The default is 10 results.')
-	print('		[-r RECIPE_ID_1 RECIPE_ID_2 …. RECIPE_ID_N] ==> Recipe candidates for the filtering. The default is all non-rated recipes of the given user are the candidates.')
-	print('')
-
-def config_from_sys_argv():
-	"""Parse the given program execution arguments.
-
-	usage: python collaborative_filtering.py <user_id>
-	optionals: [—-use-average-on-non-rated] [--use-pearson=1/0] [-i REVIEWS_CSV_PATH] [-k TOP_K_RESULT] [-r RECIPE_ID_1 RECIPE_ID_2 …. RECIPE_ID_N]	
-
-    Returns:
-		List of recipe IDs to predict in the collaborative filtering for the given user ID.
-	"""
-	argv = sys.argv
-	config_dict = dict()
-	
-	try:
-		if not len(argv) > 1:
-			raise Exception('Invalid arguments')
-
-		if not argv[1].isdigit():
-			raise Exception('Invalid arguments')
-
-		# Default values
-		config_dict['main-user-id'] = argv[1]
-		config_dict['csv-path'] = REVIEWS_CSV_PATH
-		config_dict['use-pearson'] = False
-		config_dict['use-average-on-non-rated'] = True
-		config_dict['top-k'] = 10
-
-		i = 2
-		while i < len(argv):
-			if argv[i] == '--use-average-on-non-rated=1':
-				config_dict['use-average-on-non-rated'] = True
-				i += 1
-			elif argv[i] == '--use-average-on-non-rated=0':
-				config_dict['use-average-on-non-rated'] = False
-				i += 1
-			elif argv[i] == '--use-pearson=1':
-				config_dict['use-pearson'] = True
-				i += 1
-			elif argv[i] == '--use-pearson=0':
-				config_dict['use-pearson'] = False
-				i += 1
-			elif argv[i] == '-i':
-				config_dict['csv-path'] = argv[i+1]
-				i += 2
-			elif argv[i] == '-k':
-				config_dict['top-k'] = int(argv[i+1])
-				i += 2
-			elif argv[i] == '-r':
-				i += 1
-				config_dict['recipe-list'] = []
-				while i < len(argv) and argv[i].isdigit():
-					config_dict['recipe-list'].append(argv[i])
-					i += 1
-			else:
-				raise Exception('Invalid arguments')
-	except:
-		print_program_usage_guide()
-		sys.exit()
-
-	return config_dict
-
 if __name__ == '__main__':
 	config_dict = config_from_sys_argv()
 	main_user_id = config_dict['main-user-id']
@@ -375,7 +465,7 @@ if __name__ == '__main__':
 	if 'recipe-list' in config_dict:
 		recipe_id_to_predict_list = config_dict['recipe-list']
 	else:
-		recipe_id_to_predict_list = determine_recipe_to_predict(main_user_id, user_data_list)
+		recipe_id_to_predict_list = determine_recipe_to_predict(user_id=main_user_id, user_data_list=user_data_list)
 
 	start_time = time.perf_counter()
 
@@ -384,18 +474,17 @@ if __name__ == '__main__':
 		user_data_list=user_data_list, 
 		recipe_id_to_predict_list=recipe_id_to_predict_list,
 		use_cosine_approach=(not config_dict['use-pearson']),
-		use_avg_on_non_rated_recipe=config_dict['use-average-on-non-rated']
+		use_avg_on_non_rated_recipe=config_dict['use-average-on-non-rated'],
+		num_of_processes=config_dict['num-of-processes']
 	)
 
 	finish_time = time.perf_counter()
 	print('Done filtering %d recipes for user %s (out of %d users) in %.2lf second(s).' % (len(recipe_id_to_predict_list), main_user_id, len(user_data_list), round(finish_time-start_time, 2)))
 
-	result_tuple_list = [(recipe_id_to_predict_list[i], float(prediction_result[i])) for i in range(0, len(prediction_result))]
-	result_tuple_list.sort(key=lambda x:float(x[1]), reverse=True)
-
-	show_result_len = min(config_dict['top-k'], len(result_tuple_list))
+	prediction_result.sort(key=lambda x:float(x[1]), reverse=True)
+	show_result_len = min(config_dict['top-k'], len(prediction_result))
 
 	print('Top-%d result of recipes to recommend for user %s:' % (show_result_len, main_user_id))
 	for i in range(0, show_result_len):
-		print('%d. Recipe %s with rating prediction of %.5lf.' % (i+1, result_tuple_list[i][0], result_tuple_list[i][1]))
+		print('%d. Recipe %s with rating prediction of %.5lf.' % (i+1, prediction_result[i][0], prediction_result[i][1]))
 
