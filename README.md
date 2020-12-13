@@ -1,5 +1,10 @@
 # CourseProject
+
+**A video presentation can be found [here](https://www.youtube.com/watch?v=qhwi7d4wOEM)**
+
 # Recipe Recommender System
+
+
 Driven by my curiousity of how Netflix, Youtube and Spotify serve personalized recommendations, I decided to learn how to create my own recommender system.
 
 
