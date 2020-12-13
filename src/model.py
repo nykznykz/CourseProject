@@ -24,10 +24,10 @@ pd.options.display.float_format = '{:.2f}'.format
 # load data / global variables
 all_users = pd.read_csv("./data/users/all_users.csv")
 all_users.drop_duplicates(inplace=True)
-all_recipes = pd.read_csv("./data/recipes/all_recipes.csv")
+all_recipes = pd.read_csv("./data/recipes/recipes.csv")
 all_recipes.drop_duplicates(inplace=True)
-photo_urls = pd.read_csv("./data/photo_url/photo_urls.csv")
-photo_urls.drop_duplicates(inplace=True)
+#photo_urls = pd.read_csv("./data/photo_url/photo_urls.csv")
+#photo_urls.drop_duplicates(inplace=True)
 recipe_lookup = all_recipes[["recipe_id","title"]]
 
 # Collaborative filtering for those with at least 3 reviews
@@ -113,7 +113,7 @@ class utils:
         for category in categories:
             recipe_categories[category] = all_recipes_df["category"].apply(lambda row: int(category in row))
 
-        return recipe_categories.drop(["calories", "ratings", "reviews", "total_mins"],axis=1)
+        return recipe_categories.drop(["info","ugc_image", "info", "rating_detail", "rating_average"],axis=1)
 
     def get_url(recipe_id):
         '''url(220854)'''
