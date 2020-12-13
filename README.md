@@ -22,7 +22,7 @@ Data was scraped from allrecipes.com, as there was no public API. I narrowed the
 
 Content Data
 
-- ```recipes.csv```
+- ```all_recipes.csv```
 
 - 1100+ Recipes from 
 
